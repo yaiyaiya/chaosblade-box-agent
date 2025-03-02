@@ -146,7 +146,7 @@ type TransportConfig struct {
 	Environment string
 	// Endpoint is server address with port
 	Endpoint string
-	//Timeout is the maximum amount of time a client will wait for a connect to complete
+	//Timeout is the maximum amount of time a client will wait for a connection to complete
 	Timeout time.Duration
 	//Secure is setting the socket encrypted or not
 	Secure bool
@@ -300,11 +300,35 @@ func (o *Options) GetPid() string {
 	return strconv.Itoa(os.Getpid())
 }
 func (o *Options) GetPrivateIp() string {
+	logrus.Infof("开始尝试通过TCP连接EndPoint[%v]获取IP地址...", o.TransportConfig.Endpoint)
+	conn, err := net.Dial("tcp", o.TransportConfig.Endpoint)
+	if err != nil {
+		logrus.Warnf("无法连接获取本地IP: %v, 将使用备用方法", err)
+		return o.getPrivateIpByInterfaces()
+	}
+	defer func(conn net.Conn) {
+		err := conn.Close()
+		if err != nil {
+			logrus.Errorf("关闭TCP连接失败。error: %v", err)
+		}
+	}(conn)
+
+	localAddr := conn.LocalAddr().(*net.TCPAddr)
+	ip := localAddr.IP.String()
+	logrus.Infof("成功通过TCP连接获取到IP地址: %s", ip)
+	return ip
+}
+
+// 将原来的获取IP方法改为备用方法
+func (o *Options) getPrivateIpByInterfaces() string {
+	logrus.Info("开始通过网卡接口获取IP地址...")
 	ifs, err := net.Interfaces()
 	if err != nil {
-		logrus.Fatalln("Cannot get host ip address! Please use --localIp flag to specify the host ip!!", err)
+		logrus.Fatalln("无法获取网卡接口列表: ", err)
 	}
+
 	for _, i := range ifs {
+		logrus.Debugf("检查网卡: %s, flags: %v", i.Name, i.Flags)
 		if i.Flags&net.FlagUp == 0 {
 			continue
 		}
@@ -313,10 +337,11 @@ func (o *Options) GetPrivateIp() string {
 		}
 		addrs, err := i.Addrs()
 		if err != nil {
-			logrus.Warningln(i, "get it's address error.", err)
+			logrus.Warnf("获取网卡 %s 地址失败: %v", i.Name, err)
 			continue
 		}
 		for _, addr := range addrs {
+			logrus.Debugf("检查地址: %v", addr)
 			var ip net.IP
 			switch v := addr.(type) {
 			case *net.IPNet:
